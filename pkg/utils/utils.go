@@ -92,7 +92,7 @@ func GetPfName(vf string) (string, error) {
 	return strings.TrimSpace(files[0].Name()), nil
 }
 
-// GetPciAddress takes in a interface(ifName) and VF id and returns returns its pci addr as string
+// GetPciAddress takes in an interface(ifName) and VF id and returns returns its pci addr as string
 func GetPciAddress(ifName string, vf int) (string, error) {
 	var pciaddr string
 	vfDir := filepath.Join(NetDirectory, ifName, "device", fmt.Sprintf("virtfn%d", vf))
@@ -114,7 +114,7 @@ func GetPciAddress(ifName string, vf int) (string, error) {
 	return pciaddr, nil
 }
 
-// GetSharedPF takes in VF name(ifName) as string and returns the other VF name that shares same PCI address as string
+// GetSharedPF takes in an interface name(ifName) as string and returns the other PF sharing that PCI Address.
 func GetSharedPF(ifName string) (string, error) {
 	pfName := ""
 	pfDir := filepath.Join(NetDirectory, ifName)

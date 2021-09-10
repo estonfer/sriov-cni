@@ -16,6 +16,7 @@ The SR-IOV CNI configures networks through a CNI spec configuration object. In a
 * `link_state` (string, optional): enforce link state for the VF. Allowed values: auto, enable, disable. Note that driver support may differ for this feature. For example, `i40e` is known to work but `igb` doesn't.
 * `min_tx_rate` (int, optional): change the allowed minimum transmit bandwidth, in Mbps, for the VF. Setting this to 0 disables rate limiting. The min_tx_rate value should be <= max_tx_rate. Support of this feature depends on NICs and drivers.
 * `max_tx_rate` (int, optional): change the allowed maximum transmit bandwidth, in Mbps, for the VF.
+# `UseSharedPF` (bool, optional): Whether or not automatically provision, dual port VFs if present.
 Setting this to 0 disables rate limiting.
 
 
@@ -34,7 +35,8 @@ An SR-IOV CNI config with each field filled out looks like:
     "max_tx_rate": 200,
     "spoofchk": "off",
     "trust": "on",
-    "link_state": "enable"
+    "link_state": "enable",
+    "UseSharedPF: true
 }
 ```
 

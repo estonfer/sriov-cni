@@ -46,6 +46,7 @@ type NetConf struct {
 	SpoofChk      string `json:"spoofchk,omitempty"`   // on|off
 	Trust         string `json:"trust,omitempty"`      // on|off
 	LinkState     string `json:"link_state,omitempty"` // auto|enable|disable
+	UseSharedPF   bool // whether or not to use the old school shared PF logic.
 	RuntimeConfig struct {
 		Mac string `json:"mac,omitempty"`
 	} `json:"runtimeConfig,omitempty"`

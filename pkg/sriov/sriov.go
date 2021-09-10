@@ -123,10 +123,10 @@ func (p *pciUtilsImpl) getPciAddress(ifName string, vf int) (string, error) {
 
 // Manager provides interface invoke sriov nic related operations
 type Manager interface {
-	SetupVF(conf *sriovtypes.NetConf, podifName string, cid string, netns ns.NetNS) (string, error)
+	SetupVF(conf *sriovtypes.NetConf, pfName string, podifName string, cid string, netns ns.NetNS) (string, error)
 	ReleaseVF(conf *sriovtypes.NetConf, podifName string, cid string, netns ns.NetNS) error
-	ResetVFConfig(conf *sriovtypes.NetConf) error
-	ApplyVFConfig(conf *sriovtypes.NetConf) error
+	ResetVFConfig(conf *sriovtypes.NetConf, pfName string) error
+	ApplyVFConfig(conf *sriovtypes.NetConf, pfName string) error
 }
 
 type sriovManager struct {
@@ -143,7 +143,7 @@ func NewSriovManager() Manager {
 }
 
 // SetupVF sets up a VF in Pod netns
-func (s *sriovManager) SetupVF(conf *sriovtypes.NetConf, podifName string, cid string, netns ns.NetNS) (string, error) {
+func (s *sriovManager) SetupVF(conf *sriovtypes.NetConf, pfName string, podifName string, cid string, netns ns.NetNS) (string, error) {
 	linkName := conf.OrigVfState.HostIFName
 
 	linkObj, err := s.nLink.LinkByName(linkName)
@@ -267,10 +267,10 @@ func getVfInfo(link netlink.Link, id int) *netlink.VfInfo {
 }
 
 // ApplyVFConfig configure a VF with parameters given in NetConf
-func (s *sriovManager) ApplyVFConfig(conf *sriovtypes.NetConf) error {
-	pfLink, err := s.nLink.LinkByName(conf.Master)
+func (s *sriovManager) ApplyVFConfig(conf *sriovtypes.NetConf, pfName string) error {
+	pfLink, err := s.nLink.LinkByName(pfName)
 	if err != nil {
-		return fmt.Errorf("failed to lookup master %q: %v", conf.Master, err)
+		return fmt.Errorf("failed to lookup master %q: %v", pfName, err)
 	}
 
 	// Save current the VF state before modifying it
@@ -375,10 +375,10 @@ func (s *sriovManager) ApplyVFConfig(conf *sriovtypes.NetConf) error {
 }
 
 // ResetVFConfig reset a VF to its original state
-func (s *sriovManager) ResetVFConfig(conf *sriovtypes.NetConf) error {
-	pfLink, err := s.nLink.LinkByName(conf.Master)
+func (s *sriovManager) ResetVFConfig(conf *sriovtypes.NetConf, pfName string) error {
+	pfLink, err := s.nLink.LinkByName(pfName)
 	if err != nil {
-		return fmt.Errorf("failed to lookup master %q: %v", conf.Master, err)
+		return fmt.Errorf("failed to lookup master %q: %v", pfName, err)
 	}
 
 	// Restore VLAN

@@ -42,30 +42,6 @@ func getEnvArgs(envArgsString string) (*envArgs, error) {
 }
 
 func cmdAdd(args *skel.CmdArgs) error {
-	var macAddr string
-	netConf, err := config.LoadConf(args.StdinData)
-	if err != nil {
-		return fmt.Errorf("SRIOV-CNI failed to load netconf: %v", err)
-	}
-
-	envArgs, err := getEnvArgs(args.Args)
-	if err != nil {
-		return fmt.Errorf("SRIOV-CNI failed to parse args: %v", err)
-	}
-
-	if envArgs != nil {
-		MAC := string(envArgs.MAC)
-		if MAC != "" {
-			netConf.MAC = MAC
-		}
-	}
-
-	// RuntimeConfig takes preference than envArgs.
-	// This maintains compatibility of using envArgs
-	// for MAC config.
-	if netConf.RuntimeConfig.Mac != "" {
-		netConf.MAC = netConf.RuntimeConfig.Mac
-	}
 
 	netns, err := ns.GetNS(args.Netns)
 	if err != nil {
@@ -73,82 +49,122 @@ func cmdAdd(args *skel.CmdArgs) error {
 	}
 	defer netns.Close()
 
-	sm := sriov.NewSriovManager()
-	if err := sm.ApplyVFConfig(netConf); err != nil {
-		return fmt.Errorf("SRIOV-CNI failed to configure VF %q", err)
+	netConf, err := config.LoadConf(args.StdinData)
+	if err != nil {
+		return fmt.Errorf("SRIOV-CNI failed to load netconf: %v", err)
 	}
-
+	maxSharedVF := 1
+	if netConf.UseSharedPF {
+		maxSharedVF = 2
+	}
 	result := &current.Result{}
-	result.Interfaces = []*current.Interface{{
-		Name:    args.IfName,
-		Sandbox: netns.Path(),
-	}}
-
-	if !netConf.DPDKMode {
-		macAddr, err = sm.SetupVF(netConf, args.IfName, args.ContainerID, netns)
-		defer func() {
+	for i := 1; i <= maxSharedVF; i++ {
+		var macAddr string
+		netConf, err = config.LoadConf(args.StdinData)
+		pfName := netConf.Master
+		ifName := args.IfName
+		if i == 2 {
+			ifName = ifName + fmt.Sprintf("d%d", i-1)
+			pfName, err = utils.GetSharedPF(netConf.Master)
 			if err != nil {
-				err := netns.Do(func(_ ns.NetNS) error {
-					_, err := netlink.LinkByName(args.IfName)
-					return err
-				})
-				if err == nil {
-					_ = sm.ReleaseVF(netConf, args.IfName, args.ContainerID, netns)
-				}
+				break
 			}
-		}()
-		if err != nil {
-			return fmt.Errorf("failed to set up pod interface %q from the device %q: %v", args.IfName, netConf.Master, err)
-		}
-		result.Interfaces[0].Mac = macAddr
-	}
-
-	// run the IPAM plugin
-	if netConf.IPAM.Type != "" {
-		r, err := ipam.ExecAdd(netConf.IPAM.Type, args.StdinData)
-		if err != nil {
-			return fmt.Errorf("failed to set up IPAM plugin type %q from the device %q: %v", netConf.IPAM.Type, netConf.Master, err)
 		}
 
-		defer func() {
-			if err != nil {
-				_ = ipam.ExecDel(netConf.IPAM.Type, args.StdinData)
+		envArgs, err := getEnvArgs(args.Args)
+		if err != nil {
+			return fmt.Errorf("SRIOV-CNI failed to parse args: %v", err)
+		}
+
+		if envArgs != nil {
+			MAC := string(envArgs.MAC)
+			if MAC != "" {
+				netConf.MAC = MAC
 			}
-		}()
-
-		// Convert the IPAM result into the current Result type
-		newResult, err := current.NewResultFromResult(r)
-		if err != nil {
-			return err
 		}
 
-		if len(newResult.IPs) == 0 {
-			return errors.New("IPAM plugin returned missing IP config")
+		// RuntimeConfig takes preference than envArgs.
+		// This maintains compatibility of using envArgs
+		// for MAC config.
+		if netConf.RuntimeConfig.Mac != "" {
+			netConf.MAC = netConf.RuntimeConfig.Mac
+		}
+		sm := sriov.NewSriovManager()
+		if err := sm.ApplyVFConfig(netConf, pfName); err != nil {
+			return fmt.Errorf("SRIOV-CNI failed to configure VF %q", err)
 		}
 
-		newResult.Interfaces = result.Interfaces
-
-		for _, ipc := range newResult.IPs {
-			// All addresses apply to the container interface (move from host)
-			ipc.Interface = current.Int(0)
-		}
+		result.Interfaces = []*current.Interface{{
+			Name:    ifName,
+			Sandbox: netns.Path(),
+		}}
 
 		if !netConf.DPDKMode {
-			err = netns.Do(func(_ ns.NetNS) error {
-				return ipam.ConfigureIface(args.IfName, newResult)
-			})
+			macAddr, err = sm.SetupVF(netConf, pfName, ifName, args.ContainerID, netns)
+			defer func() {
+				if err != nil {
+					err := netns.Do(func(_ ns.NetNS) error {
+						_, err := netlink.LinkByName(ifName)
+						return err
+					})
+					if err == nil {
+						_ = sm.ReleaseVF(netConf, ifName, args.ContainerID, netns)
+					}
+				}
+			}()
+			if err != nil {
+				return fmt.Errorf("failed to set up pod interface %q from the device %q: %v, %q", ifName, pfName, err, netConf.Master)
+			}
+			result.Interfaces[0].Mac = macAddr
+		}
+
+		// run the IPAM plugin
+		if netConf.IPAM.Type != "" {
+			r, err := ipam.ExecAdd(netConf.IPAM.Type, args.StdinData)
+			if err != nil {
+				return fmt.Errorf("failed to set up IPAM plugin type %q from the device %q: %v", netConf.IPAM.Type, pfName, err)
+			}
+
+			defer func() {
+				if err != nil {
+					_ = ipam.ExecDel(netConf.IPAM.Type, args.StdinData)
+				}
+			}()
+
+			// Convert the IPAM result into the current Result type
+			newResult, err := current.NewResultFromResult(r)
 			if err != nil {
 				return err
 			}
+
+			if len(newResult.IPs) == 0 {
+				return errors.New("IPAM plugin returned missing IP config")
+			}
+
+			newResult.Interfaces = result.Interfaces
+
+			for _, ipc := range newResult.IPs {
+				// All addresses apply to the container interface (move from host)
+				ipc.Interface = current.Int(0)
+			}
+
+			if !netConf.DPDKMode {
+				err = netns.Do(func(_ ns.NetNS) error {
+					return ipam.ConfigureIface(ifName, newResult)
+				})
+				if err != nil {
+					return err
+				}
+			}
+			result = newResult
 		}
-		result = newResult
-	}
 
-	// Cache NetConf for CmdDel
-	if err = utils.SaveNetConf(args.ContainerID, config.DefaultCNIDir, args.IfName, netConf); err != nil {
-		return fmt.Errorf("error saving NetConf %q", err)
-	}
+		// Cache NetConf for CmdDel
+		if err = utils.SaveNetConf(args.ContainerID, config.DefaultCNIDir, ifName, netConf); err != nil {
+			return fmt.Errorf("error saving NetConf %q", err)
+		}
 
+	}
 	return types.PrintResult(result, current.ImplementedSpecVersion)
 }
 
@@ -182,35 +198,50 @@ func cmdDel(args *skel.CmdArgs) error {
 	if args.Netns == "" {
 		return nil
 	}
-
-	sm := sriov.NewSriovManager()
-
-	if !netConf.DPDKMode {
-		netns, err := ns.GetNS(args.Netns)
-		if err != nil {
-			// according to:
-			// https://github.com/kubernetes/kubernetes/issues/43014#issuecomment-287164444
-			// if provided path does not exist (e.x. when node was restarted)
-			// plugin should silently return with success after releasing
-			// IPAM resources
-			_, ok := err.(ns.NSPathNotExistErr)
-			if ok {
-				return nil
+	pfName := netConf.Master
+        maxSharedVF := 1
+        if netConf.UseSharedPF {
+                maxSharedVF = 2
+        }
+	for i := 1; i <= maxSharedVF; i++ {
+		ifName := args.IfName
+		if i == 2 {
+			ifName = ifName + fmt.Sprintf("d%d", i-1)
+			pfName, err = utils.GetSharedPF(netConf.Master)
+			if err != nil {
+				// not a shared VF
+				break
 			}
-
-			return fmt.Errorf("failed to open netns %s: %q", netns, err)
 		}
-		defer netns.Close()
 
-		if err = sm.ReleaseVF(netConf, args.IfName, args.ContainerID, netns); err != nil {
-			return err
+		sm := sriov.NewSriovManager()
+
+		if !netConf.DPDKMode {
+			netns, err := ns.GetNS(args.Netns)
+			if err != nil {
+				// according to:
+				// https://github.com/kubernetes/kubernetes/issues/43014#issuecomment-287164444
+				// if provided path does not exist (e.x. when node was restarted)
+				// plugin should silently return with success after releasing
+				// IPAM resources
+				_, ok := err.(ns.NSPathNotExistErr)
+				if ok {
+					return nil
+				}
+
+				return fmt.Errorf("failed to open netns %s: %q", netns, err)
+			}
+			defer netns.Close()
+
+			if err = sm.ReleaseVF(netConf, ifName, args.ContainerID, netns); err != nil {
+				return err
+			}
+		}
+
+		if err := sm.ResetVFConfig(netConf, pfName); err != nil {
+			return fmt.Errorf("cmdDel() error reseting VF: %q", err)
 		}
 	}
-
-	if err := sm.ResetVFConfig(netConf); err != nil {
-		return fmt.Errorf("cmdDel() error reseting VF: %q", err)
-	}
-
 	return nil
 }
 
